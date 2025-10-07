@@ -285,6 +285,7 @@
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
     import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
+    import { getFirestore, doc, getDoc, setDoc, collection, getDocs, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
     const firebaseConfig = {
       apiKey: 'AIzaSyCUKr8bmjIfICZwXDHE7xoaBbAXizJhx3I',
@@ -298,6 +299,7 @@
 
     const firebaseApp = initializeApp(firebaseConfig);
     const auth = getAuth(firebaseApp);
+    const db = getFirestore(firebaseApp);
 
     const authOverlay = document.getElementById('authOverlay');
     const appContent = document.getElementById('appContent');
@@ -337,7 +339,8 @@
         if (authMode === 'login') {
           await signInWithEmailAndPassword(auth, email, password);
         } else {
-          await createUserWithEmailAndPassword(auth, email, password);
+          const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+          await ensureUserRole(userCredential.user);
         }
       } catch (error) {
         authError.textContent = error.message;
@@ -350,10 +353,50 @@
       });
     });
 
-    onAuthStateChanged(auth, (user) => {
+    async function ensureUserRole(user) {
+      if (!user) {
+        return 'climber';
+      }
+
+      const userDocRef = doc(db, 'userRoles', user.uid);
+      const existingSnapshot = await getDoc(userDocRef);
+
+      if (existingSnapshot.exists()) {
+        const existingData = existingSnapshot.data();
+        if (!existingData.email && user.email) {
+          await setDoc(userDocRef, { email: user.email }, { merge: true });
+        }
+        return existingData.role ?? 'climber';
+      }
+
+      const rolesSnapshot = await getDocs(collection(db, 'userRoles'));
+      const assignedRole = rolesSnapshot.empty ? 'admin' : 'climber';
+
+      await setDoc(userDocRef, {
+        role: assignedRole,
+        email: user.email ?? '',
+        createdAt: serverTimestamp(),
+      });
+
+      return assignedRole;
+    }
+
+    onAuthStateChanged(auth, async (user) => {
       if (user) {
-        authOverlay.classList.add('hidden');
-        appContent.classList.remove('hidden');
+        try {
+          const role = await ensureUserRole(user);
+
+          if (role === 'admin' || role === 'setter') {
+            authOverlay.classList.add('hidden');
+            appContent.classList.remove('hidden');
+          } else {
+            alert('You do not have permission to access the setter tools.');
+            window.location.href = 'index.html';
+          }
+        } catch (error) {
+          console.error('Failed to verify user role:', error);
+          authError.textContent = 'Unable to verify account role. Please try again.';
+        }
       } else {
         authOverlay.classList.remove('hidden');
         appContent.classList.add('hidden');
