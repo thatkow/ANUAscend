@@ -285,7 +285,7 @@
   <script type="module">
     import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
     import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-    import { getFirestore, doc, getDoc, setDoc, collection, getDocs, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+    import { getFirestore, doc, getDoc, setDoc, runTransaction, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
     const firebaseConfig = {
       apiKey: 'AIzaSyCUKr8bmjIfICZwXDHE7xoaBbAXizJhx3I',
@@ -359,26 +359,51 @@
       }
 
       const userDocRef = doc(db, 'userRoles', user.uid);
-      const existingSnapshot = await getDoc(userDocRef);
+      const bootstrapDocRef = doc(db, 'userRolesMetadata', 'bootstrap');
 
-      if (existingSnapshot.exists()) {
-        const existingData = existingSnapshot.data();
-        if (!existingData.email && user.email) {
-          await setDoc(userDocRef, { email: user.email }, { merge: true });
-        }
-        return existingData.role ?? 'climber';
+      try {
+        return await runTransaction(db, async (transaction) => {
+          const existingSnapshot = await transaction.get(userDocRef);
+
+          if (existingSnapshot.exists()) {
+            const existingData = existingSnapshot.data();
+
+            if (!existingData.email && user.email) {
+              transaction.set(userDocRef, { email: user.email }, { merge: true });
+            }
+
+            return existingData.role ?? 'climber';
+          }
+
+          const bootstrapSnapshot = await transaction.get(bootstrapDocRef);
+          const firstAdminAssigned =
+            bootstrapSnapshot.exists() && bootstrapSnapshot.data().firstAdminAssigned === true;
+          const assignedRole = firstAdminAssigned ? 'climber' : 'admin';
+
+          transaction.set(userDocRef, {
+            role: assignedRole,
+            email: user.email ?? '',
+            createdAt: serverTimestamp(),
+          });
+
+          if (!firstAdminAssigned && assignedRole === 'admin') {
+            transaction.set(
+              bootstrapDocRef,
+              {
+                firstAdminAssigned: true,
+                firstAdminUserId: user.uid,
+                firstAdminAssignedAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          }
+
+          return assignedRole;
+        });
+      } catch (error) {
+        console.error('Failed to ensure user role:', error);
+        throw error;
       }
-
-      const rolesSnapshot = await getDocs(collection(db, 'userRoles'));
-      const assignedRole = rolesSnapshot.empty ? 'admin' : 'climber';
-
-      await setDoc(userDocRef, {
-        role: assignedRole,
-        email: user.email ?? '',
-        createdAt: serverTimestamp(),
-      });
-
-      return assignedRole;
     }
 
     onAuthStateChanged(auth, async (user) => {
@@ -396,6 +421,7 @@
         } catch (error) {
           console.error('Failed to verify user role:', error);
           authError.textContent = 'Unable to verify account role. Please try again.';
+          await signOut(auth);
         }
       } else {
         authOverlay.classList.remove('hidden');
