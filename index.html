@@ -642,10 +642,7 @@
             }
           }
 
-          setPendingAuthError(
-            'Your account does not have an assigned role yet. Please contact a setter for access.',
-          );
-          return null;
+          return 'climber';
         } catch (error) {
           console.error('Failed to fetch user role:', error);
           setPendingAuthError('Unable to verify your role at this time. Please try again later.');
