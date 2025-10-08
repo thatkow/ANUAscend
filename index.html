@@ -437,8 +437,8 @@
       <form id="authForm" class="auth-card">
         <h1 id="authTitle">Sign in to continue</h1>
         <label class="auth-field">
-          <span>Email</span>
-          <input id="authEmail" type="email" name="email" autocomplete="email" required />
+          <span>Username</span>
+          <input id="authUsername" type="text" name="username" autocomplete="username" required />
         </label>
         <label class="auth-field">
           <span>Password</span>
@@ -502,6 +502,7 @@
         signInWithEmailAndPassword,
         createUserWithEmailAndPassword,
         signOut,
+        updateProfile,
       } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
       import {
         getFirestore,
@@ -535,7 +536,7 @@
       const authOverlay = document.getElementById('authOverlay');
       const appContent = document.getElementById('appContent');
       const authForm = document.getElementById('authForm');
-      const authEmail = document.getElementById('authEmail');
+      const authUsername = document.getElementById('authUsername');
       const authPassword = document.getElementById('authPassword');
       const authError = document.getElementById('authError');
       const authTitle = document.getElementById('authTitle');
@@ -549,6 +550,88 @@
 
       const tooltipColorCanvas = document.createElement('canvas');
       const tooltipColorContext = tooltipColorCanvas.getContext('2d');
+
+      const AUTH_EMAIL_SUFFIX = '@users.anuascend.app';
+      const MIN_USERNAME_LENGTH = 3;
+      const MAX_USERNAME_LENGTH = 24;
+      const USERNAME_ALLOWED_PATTERN = /^[a-z0-9._-]+$/;
+
+      function normalizeUsernameInput(value) {
+        if (typeof value !== 'string') {
+          return '';
+        }
+
+        const trimmed = value.trim();
+        if (!trimmed) {
+          return '';
+        }
+
+        const normalized = trimmed.toLowerCase();
+        if (
+          normalized.length < MIN_USERNAME_LENGTH ||
+          normalized.length > MAX_USERNAME_LENGTH ||
+          !USERNAME_ALLOWED_PATTERN.test(normalized)
+        ) {
+          return '';
+        }
+
+        return normalized;
+      }
+
+      function usernameToAuthEmail(username) {
+        return `${username}${AUTH_EMAIL_SUFFIX}`;
+      }
+
+      async function fetchUsernameForUid(uid) {
+        if (!uid) {
+          return '';
+        }
+
+        try {
+          const usernameQuery = query(
+            collection(db, 'usernames'),
+            where('uid', '==', uid),
+            limit(1),
+          );
+          const snapshot = await getDocs(usernameQuery);
+          if (!snapshot.empty) {
+            return snapshot.docs[0].id;
+          }
+        } catch (error) {
+          console.warn('Failed to lookup username by uid:', error);
+        }
+
+        return '';
+      }
+
+      async function resolveCurrentUsername(user) {
+        if (!user) {
+          return '';
+        }
+
+        const displayName = typeof user.displayName === 'string' ? user.displayName.trim() : '';
+        const normalizedDisplayName = normalizeUsernameInput(displayName);
+        if (normalizedDisplayName) {
+          return normalizedDisplayName;
+        }
+
+        const email = typeof user.email === 'string' ? user.email.trim() : '';
+        if (email && email.endsWith(AUTH_EMAIL_SUFFIX)) {
+          return email.slice(0, -AUTH_EMAIL_SUFFIX.length);
+        }
+
+        const fetchedUsername = await fetchUsernameForUid(user.uid);
+        if (fetchedUsername) {
+          try {
+            await updateProfile(user, { displayName: fetchedUsername });
+          } catch (error) {
+            console.warn('Unable to update profile display name:', error);
+          }
+          return fetchedUsername;
+        }
+
+        return '';
+      }
 
       function getTextColor(bgColor) {
         const context = document.createElement('canvas').getContext('2d');
@@ -740,6 +823,7 @@
 
       let authMode = 'login';
       let currentUser = null;
+      let currentUsername = '';
       
       function setAuthMode(mode) {
         authMode = mode;
@@ -759,14 +843,41 @@
       authForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         authError.textContent = '';
-        const email = authEmail.value.trim();
+
+        const inputUsername = authUsername.value;
+        const normalizedUsername = normalizeUsernameInput(inputUsername);
+        if (!normalizedUsername) {
+          authError.textContent = `Username must be ${MIN_USERNAME_LENGTH}-${MAX_USERNAME_LENGTH} characters (letters, numbers, dot, hyphen, underscore).`;
+          return;
+        }
+
         const password = authPassword.value;
+        const derivedEmail = usernameToAuthEmail(normalizedUsername);
 
         try {
           if (authMode === 'login') {
-            await signInWithEmailAndPassword(auth, email, password);
+            await signInWithEmailAndPassword(auth, derivedEmail, password);
           } else {
-            await createUserWithEmailAndPassword(auth, email, password);
+            const usernameRef = doc(db, 'usernames', normalizedUsername);
+            const existingUsernameSnap = await getDoc(usernameRef);
+
+            if (existingUsernameSnap.exists()) {
+              authError.textContent = 'That username is already taken. Please choose another.';
+              return;
+            }
+
+            const credential = await createUserWithEmailAndPassword(auth, derivedEmail, password);
+            const user = credential.user;
+
+            await Promise.all([
+              setDoc(usernameRef, {
+                uid: user.uid,
+                usernameLower: normalizedUsername,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              }),
+              updateProfile(user, { displayName: normalizedUsername }).catch(() => {}),
+            ]);
           }
         } catch (error) {
           authError.textContent = error.message;
@@ -779,7 +890,7 @@
         });
       });
 
-      async function ensureUserRole(user) {
+      async function ensureUserRole(user, username) {
         if (!user) {
           return null;
         }
@@ -788,6 +899,18 @@
         const existingSnap = await getDoc(roleRef);
 
         if (existingSnap.exists()) {
+          const existingData = existingSnap.data() || {};
+          if (username && (!existingData.username || !existingData.usernameLower)) {
+            try {
+              await setDoc(
+                roleRef,
+                { username, usernameLower: username.toLowerCase(), updatedAt: serverTimestamp() },
+                { merge: true },
+              );
+            } catch (error) {
+              console.warn('Failed to backfill username details:', error);
+            }
+          }
           return existingSnap.data();
         }
 
@@ -806,7 +929,8 @@
 
         const roleData = {
           role,
-          email: user.email ?? '',
+          username: username ?? null,
+          usernameLower: username ? username.toLowerCase() : null,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
@@ -815,7 +939,7 @@
         return roleData;
       }
 
-      async function resolveUserRole(user) {
+      async function resolveUserRole(user, username) {
         if (!user) {
           return null;
         }
@@ -828,7 +952,7 @@
             return typeof data.role === 'string' ? data.role.trim() : 'default';
           }
 
-          const createdRole = await ensureUserRole(user);
+          const createdRole = await ensureUserRole(user, username);
           return createdRole ? createdRole.role : 'default';
         } catch (error) {
           console.error('Failed to fetch user role:', error);
@@ -842,14 +966,23 @@
 
       onAuthStateChanged(auth, async (user) => {
         if (user) {
+          currentUser = user;
+          currentUsername = await resolveCurrentUsername(user);
+
+          if (!currentUsername) {
+            console.error('Unable to resolve username for current user.');
+            authError.textContent = 'Unable to determine username for this account. Please contact support.';
+            await signOut(auth).catch(() => {});
+            return;
+          }
+
           authOverlay.classList.add('hidden');
 
-          currentUser = user;
-          const role = await resolveUserRole(user);
+          const role = await resolveUserRole(user, currentUsername);
 
           updateNavigationForRole(role);
           appContent.classList.remove('hidden');
-          await loadAscents(user.email ?? '');
+          await loadAscents(currentUsername);
           await loadRoutes();
         } else {
           authOverlay.classList.remove('hidden');
@@ -859,6 +992,7 @@
           setAuthMode('login');
           routes = [];
           currentUser = null;
+          currentUsername = '';
           ascendedRoutes.clear();
           routeGrades.clear();
           routeMedianGrades = new Map();
@@ -886,16 +1020,16 @@
       const routeGrades = new Map();
       let routeMedianGrades = new Map();
 
-      async function loadAscents(email) {
+      async function loadAscents(username) {
         ascendedRoutes.clear();
         routeGrades.clear();
 
-        if (!email) {
+        if (!username) {
           return;
         }
 
         try {
-          const ascentRef = doc(db, 'ascents', email);
+          const ascentRef = doc(db, 'ascents', username);
           const ascentSnap = await getDoc(ascentRef);
 
           if (!ascentSnap.exists()) {
@@ -1133,9 +1267,9 @@
           return;
         }
 
-        const email = currentUser.email;
-        if (!email) {
-          console.warn('Unable to save grade: user email missing.');
+        const username = currentUsername;
+        if (!username) {
+          console.warn('Unable to save grade: username missing.');
           return;
         }
 
@@ -1145,19 +1279,19 @@
           return;
         }
 
-        const ascentRef = doc(db, 'ascents', email);
+        const ascentRef = doc(db, 'ascents', username);
 
         try {
           await setDoc(
             ascentRef,
             {
-              climber_email: email,
+              climber_username: username,
               updatedAt: serverTimestamp(),
               routes: {
                 [route.id]: {
                   grade: sanitizedGrade,
                   route_id: route.id,
-                  climber_email: email,
+                  climber_username: username,
                 },
               },
             },
@@ -1497,14 +1631,14 @@
           return;
         }
 
-        const email = currentUser.email;
-        if (!email) {
-          console.warn('Unable to mark ascent: user email missing.');
+        const username = currentUsername;
+        if (!username) {
+          console.warn('Unable to mark ascent: username missing.');
           return;
         }
 
         const routeId = route.id;
-        const ascentRef = doc(db, 'ascents', email);
+        const ascentRef = doc(db, 'ascents', username);
         const isAscended = ascendedRoutes.has(routeId);
         let shouldRefreshMedians = false;
 
@@ -1529,7 +1663,7 @@
               await deleteDoc(ascentRef);
             } else {
               await setDoc(ascentRef, {
-                climber_email: email,
+                climber_username: username,
                 updatedAt: serverTimestamp(),
                 routes: remainingRoutes,
               });
@@ -1548,13 +1682,13 @@
             await setDoc(
               ascentRef,
               {
-                climber_email: email,
+                climber_username: username,
                 updatedAt: serverTimestamp(),
                 routes: {
                   [routeId]: {
                     route_id: routeId,
                     date_ascended: new Date().toISOString(),
-                    climber_email: email,
+                    climber_username: username,
                     grade: gradeValue,
                   },
                 },

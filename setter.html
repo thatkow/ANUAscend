@@ -513,10 +513,10 @@
   <div id="authOverlay" class="auth-overlay" role="dialog" aria-modal="true" aria-labelledby="authTitle">
     <form id="authForm" class="auth-card">
       <h1 id="authTitle">Sign in to continue</h1>
-      <label class="auth-field">
-        <span>Email</span>
-        <input id="authEmail" type="email" name="email" autocomplete="email" required />
-      </label>
+        <label class="auth-field">
+          <span>Username</span>
+          <input id="authUsername" type="text" name="username" autocomplete="username" required />
+        </label>
       <label class="auth-field">
         <span>Password</span>
         <input id="authPassword" type="password" name="password" autocomplete="current-password" minlength="6" required />
@@ -545,7 +545,7 @@
           </label>
           <label class="control-field">
             <span>Setter</span>
-            <input id="routeSetterInput" type="email" placeholder="setter@example.com" autocomplete="off" />
+            <input id="routeSetterInput" type="text" placeholder="setter123" autocomplete="off" />
           </label>
           <label class="control-field">
             <span>Title</span>
@@ -616,7 +616,7 @@
               <input
                 id="roleSearchInput"
                 type="search"
-                placeholder="Search users by email"
+                placeholder="Search users by username"
                 autocomplete="off"
               />
               <button id="roleLookupButton" type="button">Lookup</button>
@@ -666,6 +666,7 @@
       signInWithEmailAndPassword,
       createUserWithEmailAndPassword,
       signOut,
+      updateProfile,
     } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
     import {
       getFirestore,
@@ -702,7 +703,7 @@
     const authOverlay = document.getElementById('authOverlay');
     const appContent = document.getElementById('appContent');
     const authForm = document.getElementById('authForm');
-    const authEmail = document.getElementById('authEmail');
+    const authUsername = document.getElementById('authUsername');
     const authPassword = document.getElementById('authPassword');
     const authError = document.getElementById('authError');
     const authTitle = document.getElementById('authTitle');
@@ -727,6 +728,88 @@
     const grantSetterButton = document.getElementById('grantSetterButton');
     const removeSetterButton = document.getElementById('removeSetterButton');
     const roleStatusMessage = document.getElementById('roleStatusMessage');
+
+    const AUTH_EMAIL_SUFFIX = '@users.anuascend.app';
+    const MIN_USERNAME_LENGTH = 3;
+    const MAX_USERNAME_LENGTH = 24;
+    const USERNAME_ALLOWED_PATTERN = /^[a-z0-9._-]+$/;
+
+    function normalizeUsernameInput(value) {
+      if (typeof value !== 'string') {
+        return '';
+      }
+
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return '';
+      }
+
+      const normalized = trimmed.toLowerCase();
+      if (
+        normalized.length < MIN_USERNAME_LENGTH ||
+        normalized.length > MAX_USERNAME_LENGTH ||
+        !USERNAME_ALLOWED_PATTERN.test(normalized)
+      ) {
+        return '';
+      }
+
+      return normalized;
+    }
+
+    function usernameToAuthEmail(username) {
+      return `${username}${AUTH_EMAIL_SUFFIX}`;
+    }
+
+    async function fetchUsernameForUid(uid) {
+      if (!uid) {
+        return '';
+      }
+
+      try {
+        const usernameQuery = query(
+          collection(db, 'usernames'),
+          where('uid', '==', uid),
+          limit(1),
+        );
+        const snapshot = await getDocs(usernameQuery);
+        if (!snapshot.empty) {
+          return snapshot.docs[0].id;
+        }
+      } catch (error) {
+        console.warn('Failed to lookup username by uid:', error);
+      }
+
+      return '';
+    }
+
+    async function resolveCurrentUsername(user) {
+      if (!user) {
+        return '';
+      }
+
+      const displayName = typeof user.displayName === 'string' ? user.displayName.trim() : '';
+      const normalizedDisplayName = normalizeUsernameInput(displayName);
+      if (normalizedDisplayName) {
+        return normalizedDisplayName;
+      }
+
+      const email = typeof user.email === 'string' ? user.email.trim() : '';
+      if (email && email.endsWith(AUTH_EMAIL_SUFFIX)) {
+        return email.slice(0, -AUTH_EMAIL_SUFFIX.length);
+      }
+
+      const fetchedUsername = await fetchUsernameForUid(user.uid);
+      if (fetchedUsername) {
+        try {
+          await updateProfile(user, { displayName: fetchedUsername });
+        } catch (error) {
+          console.warn('Unable to update profile display name:', error);
+        }
+        return fetchedUsername;
+      }
+
+      return '';
+    }
 
     const updatePanelMeasurements = () => {
       if (!controlPanel || !controlsToggle) {
@@ -773,7 +856,7 @@
     let currentRouteKey = '';
     let hasUnsavedChanges = false;
     let isSaving = false;
-    let currentUserEmail = '';
+    let currentUsername = '';
     let currentUserId = null;
     let isCanvasScrollable = false;
 
@@ -1187,9 +1270,9 @@
         if (isSelf) {
           setRoleStatus('You cannot change your own role.', 'info');
         } else if (entry.role === 'setter') {
-          setRoleStatus(`Ready to remove setter role from ${entry.email}.`, 'info');
+          setRoleStatus(`Ready to remove setter role from ${entry.username}.`, 'info');
         } else {
-          setRoleStatus(`Ready to grant setter role to ${entry.email}.`, 'info');
+          setRoleStatus(`Ready to grant setter role to ${entry.username}.`, 'info');
         }
       });
     }
@@ -1212,7 +1295,7 @@
         }
 
         if (entry.role === 'setter') {
-          setRoleStatus(`${entry.email} is already a setter. Use “Remove setter role” to revoke access.`, 'info');
+          setRoleStatus(`${entry.username} is already a setter. Use “Remove setter role” to revoke access.`, 'info');
           updateRoleActionState();
           return;
         }
@@ -1222,23 +1305,23 @@
           if (removeSetterButton) {
             removeSetterButton.disabled = true;
           }
-          setRoleStatus(`Granting setter role to ${entry.email}…`, 'info');
+          setRoleStatus(`Granting setter role to ${entry.username}…`, 'info');
           const roleRef = doc(db, 'roles', selectedId);
-          const email = entry.email || '';
+          const username = entry.username || '';
           await setDoc(
             roleRef,
             {
               role: 'setter',
               updatedAt: serverTimestamp(),
-              email,
-              emailLower: email.toLowerCase(),
+              username,
+              usernameLower: username.toLowerCase(),
             },
             { merge: true },
           );
           roleSearchResults.set(selectedId, { ...entry, role: 'setter' });
           updateRoleOptionLabel(selectedId);
           updateRoleActionState();
-          setRoleStatus(`Setter role granted to ${entry.email}.`, 'success');
+          setRoleStatus(`Setter role granted to ${entry.username}.`, 'success');
         } catch (error) {
           console.error('Failed to grant setter role:', error);
           setRoleStatus('Unable to grant setter role. Please try again.', 'error');
@@ -1265,7 +1348,7 @@
         }
 
         if (entry.role !== 'setter') {
-          setRoleStatus(`${entry.email} is not a setter.`, 'info');
+          setRoleStatus(`${entry.username} is not a setter.`, 'info');
           updateRoleActionState();
           return;
         }
@@ -1275,23 +1358,23 @@
           if (grantSetterButton) {
             grantSetterButton.disabled = true;
           }
-          setRoleStatus(`Removing setter role from ${entry.email}…`, 'info');
+          setRoleStatus(`Removing setter role from ${entry.username}…`, 'info');
           const roleRef = doc(db, 'roles', selectedId);
-          const email = entry.email || '';
+          const username = entry.username || '';
           await setDoc(
             roleRef,
             {
               role: 'default',
               updatedAt: serverTimestamp(),
-              email,
-              emailLower: email.toLowerCase(),
+              username,
+              usernameLower: username.toLowerCase(),
             },
             { merge: true },
           );
           roleSearchResults.set(selectedId, { ...entry, role: 'default' });
           updateRoleOptionLabel(selectedId);
           updateRoleActionState();
-          setRoleStatus(`Setter role removed from ${entry.email}.`, 'success');
+          setRoleStatus(`Setter role removed from ${entry.username}.`, 'success');
         } catch (error) {
           console.error('Failed to remove setter role:', error);
           setRoleStatus('Unable to remove setter role. Please try again.', 'error');
@@ -1495,10 +1578,10 @@
         return;
       }
       const record = roleSearchResults.get(userId);
-      const email = record?.email || 'Unknown email';
+      const username = record?.username || 'Unknown user';
       const role = record?.role || 'unknown';
       const suffix = currentUserId && userId === currentUserId ? ' (you)' : '';
-      const label = `${email} – ${role}${suffix}`;
+      const label = `${username} – ${role}${suffix}`;
       for (const option of roleResultsList.options) {
         if (option.value === userId) {
           option.textContent = label;
@@ -1542,8 +1625,8 @@
       const normalized = rawTerm.toLowerCase();
 
       if (!normalized) {
-        clearRoleResults('Enter an email to search');
-        setRoleStatus('Enter an email address to search.', 'info');
+        clearRoleResults('Enter a username to search');
+        setRoleStatus('Enter a username to search.', 'info');
         return;
       }
 
@@ -1563,9 +1646,9 @@
       try {
         const rolesQuery = query(
           collection(db, 'roles'),
-          orderBy('email'),
-          startAt(rawTerm),
-          endAt(`${rawTerm}\uf8ff`),
+          orderBy('usernameLower'),
+          startAt(normalized),
+          endAt(`${normalized}\uf8ff`),
           limit(MAX_ROLE_RESULTS),
         );
 
@@ -1582,17 +1665,22 @@
 
         snapshot.forEach((docSnap) => {
           const data = docSnap.data() || {};
-          const email = typeof data.email === 'string' ? data.email.trim() : '';
+          let username = typeof data.username === 'string' ? data.username.trim() : '';
+          if (!username && typeof data.email === 'string') {
+            username = data.email.trim();
+          }
+          const usernameLower = typeof data.usernameLower === 'string' ? data.usernameLower.trim() : username.toLowerCase();
           const role = typeof data.role === 'string' ? data.role.trim() : 'default';
-          if (!email) {
+
+          if (!usernameLower) {
             return;
           }
 
-          if (!email.toLowerCase().includes(normalized)) {
+          if (!usernameLower.includes(normalized)) {
             return;
           }
 
-          matches.push({ id: docSnap.id, email, role });
+          matches.push({ id: docSnap.id, username, role });
         });
 
         if (matches.length === 0) {
@@ -1602,11 +1690,11 @@
         }
 
         for (const match of matches) {
-          const { id, email, role } = match;
-          roleSearchResults.set(id, { email, role });
+          const { id, username, role } = match;
+          roleSearchResults.set(id, { username, role });
           const option = document.createElement('option');
           option.value = id;
-          option.textContent = `${email} – ${role}${currentUserId && id === currentUserId ? ' (you)' : ''}`;
+          option.textContent = `${username} – ${role}${currentUserId && id === currentUserId ? ' (you)' : ''}`;
           roleResultsList.append(option);
         }
 
@@ -1620,9 +1708,9 @@
           if (isSelf) {
             setRoleStatus('You cannot change your own role.', 'info');
           } else if (entry.role === 'setter') {
-            setRoleStatus(`Ready to remove setter role from ${entry.email}.`, 'info');
+            setRoleStatus(`Ready to remove setter role from ${entry.username}.`, 'info');
           } else {
-            setRoleStatus(`Ready to grant setter role to ${entry.email}.`, 'info');
+            setRoleStatus(`Ready to grant setter role to ${entry.username}.`, 'info');
           }
         } else {
           setRoleStatus('Select a user to manage setter access.', 'info');
@@ -1902,7 +1990,7 @@
 
       currentRouteKey = routeKey;
       routeSelector.value = routeKey;
-      routeSetterInput.value = data.setter || currentUserEmail || '';
+      routeSetterInput.value = data.setter || currentUsername || '';
       routeTitleInput.value = data.title;
       routeDescriptionInput.value = data.description;
       routeDateSetInput.value = isoStringToInputValue(data.date_set) || '';
@@ -1923,7 +2011,7 @@
     function prepareNewRoute(statusMessage = '') {
       currentRouteKey = '';
       routeSelector.value = '';
-      routeSetterInput.value = currentUserEmail || '';
+      routeSetterInput.value = currentUsername || '';
       routeTitleInput.value = '';
       routeDescriptionInput.value = '';
       routeDateSetInput.value = getNowInputValue();
@@ -1996,10 +2084,11 @@
       }
 
       const normalizedPoints = convertPointsToNormalized();
-      const setter = routeSetterInput.value.trim();
-      routeSetterInput.value = setter;
+      const setterInput = routeSetterInput.value;
+      const setter = normalizeUsernameInput(setterInput);
+      routeSetterInput.value = setter || setterInput.trim();
       if (!setter) {
-        setStatus('Setter email is required before saving.', 'error');
+        setStatus('Setter username is required before saving.', 'error');
         routeSetterInput.focus();
         return;
       }
@@ -2224,14 +2313,41 @@
     authForm.addEventListener('submit', async (event) => {
       event.preventDefault();
       authError.textContent = '';
-      const email = authEmail.value.trim();
+
+      const inputUsername = authUsername.value;
+      const normalizedUsername = normalizeUsernameInput(inputUsername);
+      if (!normalizedUsername) {
+        authError.textContent = `Username must be ${MIN_USERNAME_LENGTH}-${MAX_USERNAME_LENGTH} characters (letters, numbers, dot, hyphen, underscore).`;
+        return;
+      }
+
       const password = authPassword.value;
+      const derivedEmail = usernameToAuthEmail(normalizedUsername);
 
       try {
         if (authMode === 'login') {
-          await signInWithEmailAndPassword(auth, email, password);
+          await signInWithEmailAndPassword(auth, derivedEmail, password);
         } else {
-          await createUserWithEmailAndPassword(auth, email, password);
+          const usernameRef = doc(db, 'usernames', normalizedUsername);
+          const existingUsernameSnap = await getDoc(usernameRef);
+
+          if (existingUsernameSnap.exists()) {
+            authError.textContent = 'That username is already taken. Please choose another.';
+            return;
+          }
+
+          const credential = await createUserWithEmailAndPassword(auth, derivedEmail, password);
+          const user = credential.user;
+
+          await Promise.all([
+            setDoc(usernameRef, {
+              uid: user.uid,
+              usernameLower: normalizedUsername,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            }),
+            updateProfile(user, { displayName: normalizedUsername }).catch(() => {}),
+          ]);
         }
       } catch (error) {
         authError.textContent = error.message;
@@ -2250,7 +2366,7 @@
       });
     });
 
-    async function ensureUserRole(user) {
+    async function ensureUserRole(user, username) {
       if (!user) {
         return null;
       }
@@ -2260,23 +2376,21 @@
 
       if (existingSnap.exists()) {
         const existingData = existingSnap.data() || {};
-        if (existingData.email && !existingData.emailLower) {
+        if (!existingData.username && username) {
           try {
             await setDoc(
               roleRef,
-              { emailLower: String(existingData.email).toLowerCase(), updatedAt: serverTimestamp() },
+              { username, usernameLower: username.toLowerCase(), updatedAt: serverTimestamp() },
               { merge: true },
             );
           } catch (error) {
-            console.warn('Failed to backfill emailLower field:', error);
+            console.warn('Failed to backfill username field:', error);
           }
         }
         return existingSnap.data();
       }
 
       let role = 'default';
-
-      const email = typeof user.email === 'string' ? user.email.trim() : '';
 
       try {
         const snapshot = await getDocs(
@@ -2291,8 +2405,8 @@
 
       const roleData = {
         role,
-        email,
-        emailLower: email.toLowerCase(),
+        username: username ?? null,
+        usernameLower: username ? username.toLowerCase() : null,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
@@ -2301,7 +2415,7 @@
       return roleData;
     }
 
-    async function resolveUserRole(user) {
+    async function resolveUserRole(user, username) {
       if (!user) {
         return null;
       }
@@ -2314,7 +2428,7 @@
           return typeof data.role === 'string' ? data.role.trim() : 'default';
         }
 
-        const createdRole = await ensureUserRole(user);
+        const createdRole = await ensureUserRole(user, username);
         return createdRole ? createdRole.role : 'default';
       } catch (error) {
         console.error('Failed to fetch user role:', error);
@@ -2347,10 +2461,17 @@
     onAuthStateChanged(auth, async (user) => {
       if (user) {
         currentUserId = user.uid;
-        currentUserEmail = user.email ?? '';
+        currentUsername = await resolveCurrentUsername(user);
+
+        if (!currentUsername) {
+          authError.textContent = 'Unable to determine username for this account. Please contact support.';
+          await signOut(auth).catch(() => {});
+          return;
+        }
+
         authOverlay.classList.add('hidden');
 
-        const role = await resolveUserRole(user);
+        const role = await resolveUserRole(user, currentUsername);
 
         if (!role) {
           authError.textContent = 'Unable to determine your role. Please try again later.';
@@ -2376,7 +2497,7 @@
           console.error('Unable to initialise routes:', error);
         }
       } else {
-        currentUserEmail = '';
+        currentUsername = '';
         currentUserId = null;
         authOverlay.classList.remove('hidden');
         appContent.classList.add('hidden');
