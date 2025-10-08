@@ -2248,22 +2248,29 @@
       }
 
       const roleRef = doc(db, 'roles', user.uid);
-      const existingSnap = await getDoc(roleRef);
 
-      if (existingSnap.exists()) {
-        const existingData = existingSnap.data() || {};
-        if (existingData.email && !existingData.emailLower) {
-          try {
-            await setDoc(
-              roleRef,
-              { emailLower: String(existingData.email).toLowerCase(), updatedAt: serverTimestamp() },
-              { merge: true },
-            );
-          } catch (error) {
-            console.warn('Failed to backfill emailLower field:', error);
+      try {
+        const existingSnap = await getDoc(roleRef);
+        if (existingSnap.exists()) {
+          const existingData = existingSnap.data() || {};
+          const normalizedRole = typeof existingData.role === 'string' ? existingData.role : 'climber';
+
+          if (existingData.email && !existingData.emailLower) {
+            try {
+              await setDoc(
+                roleRef,
+                { emailLower: String(existingData.email).toLowerCase(), updatedAt: serverTimestamp() },
+                { merge: true },
+              );
+            } catch (error) {
+              console.warn('Failed to backfill emailLower field:', error);
+            }
           }
+
+          return { ...existingData, role: normalizedRole };
         }
-        return existingSnap.data();
+      } catch (error) {
+        console.warn('Failed to inspect existing role information:', error);
       }
 
       let role = 'climber';
@@ -2287,7 +2294,13 @@
         updatedAt: serverTimestamp(),
       };
 
-      await setDoc(roleRef, roleData);
+      try {
+        await setDoc(roleRef, roleData);
+      } catch (error) {
+        console.error('Failed to persist role information:', error);
+        return roleData;
+      }
+
       return roleData;
     }
 
@@ -2300,15 +2313,20 @@
         const roleRef = doc(db, 'roles', user.uid);
         const roleSnap = await getDoc(roleRef);
         if (roleSnap.exists()) {
-          return roleSnap.data().role;
+          const data = roleSnap.data() || {};
+          const normalizedRole = typeof data.role === 'string' ? data.role : 'climber';
+          return normalizedRole;
         }
 
         const createdRole = await ensureUserRole(user);
-        return createdRole ? createdRole.role : null;
+        if (createdRole && typeof createdRole.role === 'string') {
+          return createdRole.role;
+        }
       } catch (error) {
         console.error('Failed to fetch user role:', error);
-        return null;
       }
+
+      return 'climber';
     }
 
     function handleUnauthorized() {

@@ -628,10 +628,16 @@
         }
 
         const roleRef = doc(db, 'roles', user.uid);
-        const existingSnap = await getDoc(roleRef);
 
-        if (existingSnap.exists()) {
-          return existingSnap.data();
+        try {
+          const existingSnap = await getDoc(roleRef);
+          if (existingSnap.exists()) {
+            const existingData = existingSnap.data() ?? {};
+            const existingRole = typeof existingData.role === 'string' ? existingData.role : 'climber';
+            return { ...existingData, role: existingRole };
+          }
+        } catch (error) {
+          console.warn('Failed to inspect existing role information:', error);
         }
 
         let role = 'climber';
@@ -652,7 +658,13 @@
           updatedAt: serverTimestamp(),
         };
 
-        await setDoc(roleRef, roleData);
+        try {
+          await setDoc(roleRef, roleData);
+        } catch (error) {
+          console.error('Failed to persist role information:', error);
+          return roleData;
+        }
+
         return roleData;
       }
 
@@ -665,15 +677,20 @@
           const roleRef = doc(db, 'roles', user.uid);
           const roleSnap = await getDoc(roleRef);
           if (roleSnap.exists()) {
-            return roleSnap.data().role;
+            const data = roleSnap.data() ?? {};
+            const normalizedRole = typeof data.role === 'string' ? data.role : 'climber';
+            return normalizedRole;
           }
 
           const createdRole = await ensureUserRole(user);
-          return createdRole ? createdRole.role : null;
+          if (createdRole && typeof createdRole.role === 'string') {
+            return createdRole.role;
+          }
         } catch (error) {
           console.error('Failed to fetch user role:', error);
-          return null;
         }
+
+        return 'climber';
       }
 
       function updateNavigationForRole(role) {
