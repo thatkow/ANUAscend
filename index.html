@@ -2163,22 +2163,11 @@
         const anchor = computedAnchor || (fallbackAnchor ? { ...fallbackAnchor } : null);
 
         const radius = Math.max(12, canvas.width * 0.01);
-        const gapRadius = anchor ? Math.max(0, radius - lineWidth / 2) : 0;
-
         ctx.save();
         ctx.lineWidth = lineWidth;
         ctx.strokeStyle = strokeColor;
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
-
-        if (anchor && gapRadius > 0) {
-          ctx.beginPath();
-          ctx.rect(0, 0, canvas.width, canvas.height);
-          ctx.moveTo(anchor.x + gapRadius, anchor.y);
-          ctx.arc(anchor.x, anchor.y, gapRadius, 0, Math.PI * 2);
-          ctx.clip('evenodd');
-        }
-
         ctx.stroke(path);
         ctx.restore();
 
@@ -2190,25 +2179,7 @@
           anchorRadius: radius,
         });
 
-        if (ascendedRoutes.has(route.id)) {
-          ctx.save();
-          ctx.fillStyle = strokeColor;
-          ctx.globalAlpha = 0.92;
-          ctx.beginPath();
-          ctx.arc(anchor.x, anchor.y, radius, 0, Math.PI * 2);
-          ctx.fill();
-
-          ctx.globalAlpha = 1;
-          ctx.strokeStyle = '#111';
-          ctx.lineWidth = Math.max(2, radius * 0.18);
-          ctx.lineCap = 'round';
-          ctx.beginPath();
-          ctx.moveTo(anchor.x - radius * 0.45, anchor.y + radius * 0.1);
-          ctx.lineTo(anchor.x - radius * 0.15, anchor.y + radius * 0.45);
-          ctx.lineTo(anchor.x + radius * 0.5, anchor.y - radius * 0.35);
-          ctx.stroke();
-          ctx.restore();
-        } else {
+        if (anchor) {
           ctx.save();
           ctx.lineWidth = lineWidth;
           ctx.strokeStyle = strokeColor;
@@ -2216,6 +2187,34 @@
           ctx.arc(anchor.x, anchor.y, radius, 0, Math.PI * 2);
           ctx.stroke();
           ctx.restore();
+
+          if (ascendedRoutes.has(route.id)) {
+            const checkStartX = anchor.x - radius * 0.45;
+            const checkStartY = anchor.y + radius * 0.1;
+            const checkMidX = anchor.x - radius * 0.15;
+            const checkMidY = anchor.y + radius * 0.45;
+            const baseEndX = anchor.x + radius * 0.5;
+            const baseEndY = anchor.y - radius * 0.35;
+            const dx = baseEndX - checkMidX;
+            const dy = baseEndY - checkMidY;
+            const baseLength = Math.hypot(dx, dy) || 1;
+            const extension = radius * 0.5;
+            const scale = (baseLength + extension) / baseLength;
+            const checkEndX = checkMidX + dx * scale;
+            const checkEndY = checkMidY + dy * scale;
+
+            ctx.save();
+            ctx.strokeStyle = '#111';
+            ctx.lineWidth = Math.max(2, radius * 0.18);
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            ctx.moveTo(checkStartX, checkStartY);
+            ctx.lineTo(checkMidX, checkMidY);
+            ctx.lineTo(checkEndX, checkEndY);
+            ctx.stroke();
+            ctx.restore();
+          }
         }
       }
 
