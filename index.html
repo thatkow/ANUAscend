@@ -497,8 +497,6 @@
         serverTimestamp,
         collection,
         getDocs,
-        query,
-        limit,
       } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
       const firebaseConfig = {
@@ -583,6 +581,11 @@
 
       let authMode = 'login';
       let currentUser = null;
+      let pendingAuthErrorMessage = '';
+
+      function setPendingAuthError(message) {
+        pendingAuthErrorMessage = typeof message === 'string' && message.trim() ? message.trim() : '';
+      }
       
       function setAuthMode(mode) {
         authMode = mode;
@@ -622,40 +625,6 @@
         });
       });
 
-      async function ensureUserRole(user) {
-        if (!user) {
-          return null;
-        }
-
-        const roleRef = doc(db, 'roles', user.uid);
-        const existingSnap = await getDoc(roleRef);
-
-        if (existingSnap.exists()) {
-          return existingSnap.data();
-        }
-
-        let role = 'climber';
-
-        try {
-          const snapshot = await getDocs(query(collection(db, 'roles'), limit(1)));
-          if (snapshot.empty) {
-            role = 'setter';
-          }
-        } catch (error) {
-          console.warn('Unable to inspect existing roles:', error);
-        }
-
-        const roleData = {
-          role,
-          email: user.email ?? '',
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        };
-
-        await setDoc(roleRef, roleData);
-        return roleData;
-      }
-
       async function resolveUserRole(user) {
         if (!user) {
           return null;
@@ -665,13 +634,21 @@
           const roleRef = doc(db, 'roles', user.uid);
           const roleSnap = await getDoc(roleRef);
           if (roleSnap.exists()) {
-            return roleSnap.data().role;
+            const roleData = roleSnap.data() ?? {};
+            const role = typeof roleData.role === 'string' ? roleData.role : null;
+
+            if (role) {
+              return role;
+            }
           }
 
-          const createdRole = await ensureUserRole(user);
-          return createdRole ? createdRole.role : null;
+          setPendingAuthError(
+            'Your account does not have an assigned role yet. Please contact a setter for access.',
+          );
+          return null;
         } catch (error) {
           console.error('Failed to fetch user role:', error);
+          setPendingAuthError('Unable to verify your role at this time. Please try again later.');
           return null;
         }
       }
@@ -688,7 +665,10 @@
           const role = await resolveUserRole(user);
 
           if (!role) {
-            authError.textContent = 'Unable to determine your role. Please try again later.';
+            const message =
+              pendingAuthErrorMessage || 'Unable to determine your role. Please try again later.';
+            setPendingAuthError(message);
+            authError.textContent = message;
             await signOut(auth);
             return;
           }
@@ -703,6 +683,10 @@
           setterLink.classList.add('hidden');
           authForm.reset();
           setAuthMode('login');
+          if (pendingAuthErrorMessage) {
+            authError.textContent = pendingAuthErrorMessage;
+          }
+          setPendingAuthError('');
           routes = [];
           currentUser = null;
           ascendedRoutes.clear();
