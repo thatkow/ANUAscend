@@ -135,8 +135,10 @@
         right: 1rem;
         z-index: 5;
         display: flex;
+        flex-wrap: wrap;
         gap: 0.75rem;
         align-items: center;
+        justify-content: flex-end;
       }
 
       .info-wrapper {
@@ -241,6 +243,33 @@
         transform: translateY(-1px);
         box-shadow: 0 14px 28px rgba(0, 0, 0, 0.45);
         outline: none;
+      }
+
+      .role-notice {
+        margin: 0 auto;
+        margin-top: calc(1rem + 60px);
+        padding: 0.85rem 1rem;
+        border-radius: 0.75rem;
+        font-size: 0.9rem;
+        line-height: 1.4;
+        background: rgba(126, 217, 87, 0.14);
+        border: 1px solid rgba(126, 217, 87, 0.45);
+        color: #c7f7ab;
+        max-width: min(520px, 92vw);
+        text-align: center;
+        backdrop-filter: blur(2px);
+      }
+
+      .role-notice[data-variant='warning'] {
+        background: rgba(255, 193, 7, 0.12);
+        border-color: rgba(255, 193, 7, 0.5);
+        color: #ffe082;
+      }
+
+      .role-notice[data-variant='error'] {
+        background: rgba(255, 122, 122, 0.14);
+        border-color: rgba(255, 122, 122, 0.55);
+        color: #ffb3b3;
       }
 
       .route-tooltip {
@@ -468,6 +497,12 @@
         </div>
         <button id="signOutButton" class="sign-out">Sign out</button>
       </header>
+      <p
+        id="roleNotice"
+        class="role-notice hidden"
+        role="status"
+        aria-live="polite"
+      ></p>
       <div class="canvas-container">
         <canvas id="previewCanvas" aria-hidden="true"></canvas>
       </div>
@@ -525,6 +560,7 @@
       const toggleAuthModeButton = document.getElementById('toggleAuthMode');
       const signOutButton = document.getElementById('signOutButton');
       const setterLink = document.getElementById('setterLink');
+      const roleNotice = document.getElementById('roleNotice');
       const tooltip = document.getElementById('routeTooltip');
       const infoButton = document.getElementById('infoButton');
       const infoPopover = document.getElementById('infoPopover');
@@ -581,10 +617,33 @@
 
       let authMode = 'login';
       let currentUser = null;
+      let currentUserRole = null;
+      let isRoleVerified = false;
       let pendingAuthErrorMessage = '';
 
       function setPendingAuthError(message) {
         pendingAuthErrorMessage = typeof message === 'string' && message.trim() ? message.trim() : '';
+      }
+
+      const limitedRoleMessage =
+        'Your account does not have an assigned role yet. Contact a setter to be added for full access to live routes and ascents.';
+
+      function setRoleNotice(message = '', variant = 'info') {
+        if (!roleNotice) {
+          return;
+        }
+
+        const sanitized = typeof message === 'string' ? message.trim() : '';
+        if (!sanitized) {
+          roleNotice.textContent = '';
+          roleNotice.classList.add('hidden');
+          roleNotice.removeAttribute('data-variant');
+          return;
+        }
+
+        roleNotice.textContent = sanitized;
+        roleNotice.dataset.variant = variant;
+        roleNotice.classList.remove('hidden');
       }
       
       function setAuthMode(mode) {
@@ -635,14 +694,14 @@
           const roleSnap = await getDoc(roleRef);
           if (roleSnap.exists()) {
             const roleData = roleSnap.data() ?? {};
-            const role = typeof roleData.role === 'string' ? roleData.role : null;
+            const role = typeof roleData.role === 'string' ? roleData.role.trim() : '';
 
             if (role) {
-              return role;
+              return { role, verified: true };
             }
           }
 
-          return 'climber';
+          return { role: 'climber', verified: false };
         } catch (error) {
           console.error('Failed to fetch user role:', error);
           setPendingAuthError('Unable to verify your role at this time. Please try again later.');
@@ -659,9 +718,9 @@
           authOverlay.classList.add('hidden');
 
           currentUser = user;
-          const role = await resolveUserRole(user);
+          const roleResult = await resolveUserRole(user);
 
-          if (!role) {
+          if (!roleResult) {
             const message =
               pendingAuthErrorMessage || 'Unable to determine your role. Please try again later.';
             setPendingAuthError(message);
@@ -670,10 +729,21 @@
             return;
           }
 
+          const { role, verified } = roleResult;
+          currentUserRole = role;
+          isRoleVerified = Boolean(verified);
+
           updateNavigationForRole(role);
           appContent.classList.remove('hidden');
-          await loadAscents(user.email ?? '');
-          await loadRoutes();
+
+          if (isRoleVerified) {
+            setRoleNotice('');
+            await loadAscents(user.email ?? '');
+            await loadRoutes();
+          } else {
+            setRoleNotice(limitedRoleMessage, 'warning');
+            applyLimitedAccessState();
+          }
         } else {
           authOverlay.classList.remove('hidden');
           appContent.classList.add('hidden');
@@ -684,13 +754,11 @@
             authError.textContent = pendingAuthErrorMessage;
           }
           setPendingAuthError('');
-          routes = [];
           currentUser = null;
-          ascendedRoutes.clear();
-          routeGrades.clear();
-          routeMedianGrades = new Map();
-          hideTooltip({ force: true });
-          redraw();
+          currentUserRole = null;
+          isRoleVerified = false;
+          setRoleNotice('');
+          applyLimitedAccessState();
         }
       });
 
@@ -713,9 +781,30 @@
       const routeGrades = new Map();
       let routeMedianGrades = new Map();
 
+      function applyLimitedAccessState() {
+        routes = [];
+        routePaths = [];
+        activeRouteId = null;
+        pinnedRouteId = null;
+        pinnedPosition = null;
+        ascendedRoutes.clear();
+        routeGrades.clear();
+        routeMedianGrades = new Map();
+        if (typeof hideTooltip === 'function') {
+          hideTooltip({ force: true });
+        }
+        if (typeof redraw === 'function') {
+          redraw();
+        }
+      }
+
       async function loadAscents(email) {
         ascendedRoutes.clear();
         routeGrades.clear();
+
+        if (!isRoleVerified) {
+          return;
+        }
 
         if (!email) {
           return;
@@ -950,6 +1039,11 @@
           return;
         }
 
+        if (!isRoleVerified) {
+          setRoleNotice(limitedRoleMessage, 'warning');
+          return;
+        }
+
         if (!currentUser) {
           console.warn('Unable to save grade: no authenticated user.');
           return;
@@ -1007,6 +1101,10 @@
       async function fetchMedianGrades() {
         const medianMap = new Map();
 
+        if (!isRoleVerified) {
+          return medianMap;
+        }
+
         try {
           const snapshot = await getDocs(collection(db, 'ascents'));
           const gradeBuckets = new Map();
@@ -1059,6 +1157,10 @@
       }
 
       async function refreshMedianGrades() {
+        if (!isRoleVerified) {
+          return;
+        }
+
         routeMedianGrades = await fetchMedianGrades();
 
         if (Array.isArray(routes)) {
@@ -1263,6 +1365,10 @@
       }
 
       async function loadRoutes() {
+        if (!isRoleVerified) {
+          return;
+        }
+
         try {
           const [routesSnapshot, medianMap] = await Promise.all([
             getDocs(collection(db, 'routes')),
@@ -1319,6 +1425,11 @@
 
       async function toggleRouteAscent(route) {
         if (!currentUser) {
+          return;
+        }
+
+        if (!isRoleVerified) {
+          setRoleNotice(limitedRoleMessage, 'warning');
           return;
         }
 
