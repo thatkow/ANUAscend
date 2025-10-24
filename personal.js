@@ -4395,6 +4395,23 @@ function shouldBlockSingleClick(event) {
   return false;
 }
 
+function blurActiveElementForIOSFocus(event) {
+  if (!IOS_SINGLE_TAP_OVERRIDE || !isTouchLikeEvent(event)) {
+    return;
+  }
+
+  const target = (event?.currentTarget || event?.target) ?? null;
+  const activeElement = document.activeElement;
+
+  if (
+    activeElement &&
+    activeElement !== target &&
+    typeof activeElement.blur === 'function'
+  ) {
+    activeElement.blur();
+  }
+}
+
 function buildGradeControls(route) {
   if (!route || !route.id) {
     return null;
@@ -4428,6 +4445,12 @@ function buildGradeControls(route) {
   gradeInput.readOnly = true;
   if (!IOS_SINGLE_TAP_OVERRIDE) {
     gradeInput.classList.add('requires-double-click');
+  }
+
+  if (IOS_SINGLE_TAP_OVERRIDE) {
+    ['touchend', 'pointerup', 'mouseup'].forEach((type) => {
+      gradeInput.addEventListener(type, blurActiveElementForIOSFocus, true);
+    });
   }
 
   gradeInput.addEventListener(
@@ -4859,6 +4882,12 @@ function buildBetatipsSection(route, ariaLines = []) {
     textarea.readOnly = true;
     if (!IOS_SINGLE_TAP_OVERRIDE) {
       textarea.classList.add('requires-double-click');
+    }
+
+    if (IOS_SINGLE_TAP_OVERRIDE) {
+      ['touchend', 'pointerup', 'mouseup'].forEach((type) => {
+        textarea.addEventListener(type, blurActiveElementForIOSFocus, true);
+      });
     }
 
     textarea.addEventListener(
