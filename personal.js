@@ -4283,7 +4283,74 @@ function createTooltipCloseButton() {
   return closeButton;
 }
 
+const TOUCH_DOUBLE_TAP_MAX_DELAY_MS = 450;
+let lastTouchActivationTarget = null;
+let lastTouchActivationTime = 0;
+
+function getRelativeTimestamp() {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+function isTouchLikeEvent(event) {
+  if (!event) {
+    return false;
+  }
+
+  if (typeof PointerEvent !== 'undefined' && event instanceof PointerEvent) {
+    return event.pointerType === 'touch' || event.pointerType === 'pen';
+  }
+
+  if (typeof TouchEvent !== 'undefined' && event instanceof TouchEvent) {
+    return true;
+  }
+
+  const type = typeof event.type === 'string' ? event.type : '';
+  if (type.startsWith('touch')) {
+    return true;
+  }
+
+  if (typeof MouseEvent !== 'undefined' && event instanceof MouseEvent) {
+    const hasTouchPoints =
+      typeof navigator?.maxTouchPoints === 'number' && navigator.maxTouchPoints > 0;
+    if (hasTouchPoints && (type === 'click' || type === 'mousedown' || type === 'mouseup')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isTouchDoubleTap(event) {
+  if (!isTouchLikeEvent(event)) {
+    return false;
+  }
+
+  const target = (event?.currentTarget || event?.target) ?? null;
+  const now = getRelativeTimestamp();
+
+  if (
+    target &&
+    lastTouchActivationTarget === target &&
+    now - lastTouchActivationTime <= TOUCH_DOUBLE_TAP_MAX_DELAY_MS
+  ) {
+    lastTouchActivationTarget = null;
+    lastTouchActivationTime = 0;
+    return true;
+  }
+
+  lastTouchActivationTarget = target;
+  lastTouchActivationTime = now;
+  return false;
+}
+
 function shouldBlockSingleClick(event) {
+  if (isTouchDoubleTap(event)) {
+    return false;
+  }
+
   if (!event || typeof event.detail !== 'number' || event.detail < 2) {
     event.preventDefault();
     event.stopPropagation();
