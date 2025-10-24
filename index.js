@@ -99,6 +99,8 @@ const tutorialDescription = document.getElementById('tutorialDescription');
 const tutorialPrimaryAction = document.getElementById('tutorialPrimaryAction');
 const tutorialSecondaryAction = document.getElementById('tutorialSecondaryAction');
 const tutorialProgress = document.getElementById('tutorialProgress');
+const tutorialBrand = document.getElementById('tutorialBrand');
+const tutorialSkipButton = document.getElementById('tutorialSkipButton');
 
 let infoHighlightsContainer = null;
 let infoModeActive = false;
@@ -2979,6 +2981,8 @@ function renderTutorialStep() {
     return;
   }
 
+  setTutorialBrandVisibility(tutorialStepIndex === 0);
+
   if (tutorialTitle) {
     tutorialTitle.textContent = step.title || '';
   }
@@ -2986,19 +2990,42 @@ function renderTutorialStep() {
   setTutorialDescriptionContent(step.body || []);
 
   if (tutorialProgress) {
-    tutorialProgress.textContent = `Step ${tutorialStepIndex + 1} of ${tutorialSteps.length}`;
-    tutorialProgress.classList.toggle('hidden', tutorialSteps.length === 0);
+    const shouldShowProgress = tutorialSteps.length > 0 && tutorialStepIndex > 0;
+    tutorialProgress.textContent = shouldShowProgress
+      ? `Step ${tutorialStepIndex + 1} of ${tutorialSteps.length}`
+      : '';
+    tutorialProgress.classList.toggle('hidden', !shouldShowProgress);
+  }
+
+  if (tutorialSkipButton) {
+    const shouldShowSkip = tutorialStepIndex === 0;
+    tutorialSkipButton.classList.toggle('hidden', !shouldShowSkip);
+    tutorialSkipButton.setAttribute('aria-hidden', shouldShowSkip ? 'false' : 'true');
   }
 
   if (tutorialPrimaryAction) {
-    tutorialPrimaryAction.textContent =
-      tutorialStepIndex === tutorialSteps.length - 1 ? 'Finish' : 'Next';
+    let primaryLabel = 'Next';
+    if (tutorialStepIndex === tutorialSteps.length - 1) {
+      primaryLabel = 'Finish';
+    } else if (tutorialStepIndex === 0) {
+      primaryLabel = 'Tutorial';
+    }
+    tutorialPrimaryAction.textContent = primaryLabel;
   }
 
   if (tutorialSecondaryAction) {
     tutorialSecondaryAction.textContent = 'Back';
     tutorialSecondaryAction.classList.toggle('hidden', tutorialStepIndex <= 0);
   }
+}
+
+function setTutorialBrandVisibility(shouldShow) {
+  if (!tutorialBrand) {
+    return;
+  }
+
+  tutorialBrand.classList.toggle('hidden', !shouldShow);
+  tutorialBrand.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
 }
 
 async function goToTutorialStep(index) {
@@ -3048,6 +3075,13 @@ function renderTutorialInvite() {
   tutorialInviteOpen = true;
   tutorialActive = false;
 
+  setTutorialBrandVisibility(false);
+
+  if (tutorialSkipButton) {
+    tutorialSkipButton.classList.add('hidden');
+    tutorialSkipButton.setAttribute('aria-hidden', 'true');
+  }
+
   if (tutorialProgress) {
     tutorialProgress.classList.add('hidden');
   }
@@ -3058,21 +3092,30 @@ function renderTutorialInvite() {
   setTutorialOverlayAlignment('center');
   closeTutorialRouteTooltip();
 
+  const firstStep = tutorialSteps[0] || null;
+
   if (tutorialTitle) {
-    tutorialTitle.textContent = 'Take a tour?';
+    const inviteTitle = typeof firstStep?.title === 'string' && firstStep.title.trim().length
+      ? firstStep.title
+      : 'Welcome to Ascend';
+    tutorialTitle.textContent = inviteTitle;
   }
 
-  setTutorialDescriptionContent([
-    'Would you like a quick guided tour of the main controls before you dive in?',
-    'If you\'d rather explore on your own, you can close this dialog at any time.',
-  ]);
+  if (firstStep) {
+    setTutorialDescriptionContent(firstStep.body || []);
+  } else {
+    setTutorialDescriptionContent([
+      'Ascend helps you explore the latest problems on the wall and stay up to date with the gym.',
+      'Use this public view to browse climbs and see what sets are available right now.',
+    ]);
+  }
 
   if (tutorialPrimaryAction) {
-    tutorialPrimaryAction.textContent = 'Start tutorial';
+    tutorialPrimaryAction.textContent = 'Take a tour?';
   }
 
   if (tutorialSecondaryAction) {
-    tutorialSecondaryAction.textContent = 'Skip';
+    tutorialSecondaryAction.textContent = 'Close';
     tutorialSecondaryAction.classList.remove('hidden');
   }
 }
@@ -3135,6 +3178,13 @@ async function finishTutorial() {
     tutorialProgress.classList.add('hidden');
   }
 
+  if (tutorialSkipButton) {
+    tutorialSkipButton.classList.add('hidden');
+    tutorialSkipButton.setAttribute('aria-hidden', 'true');
+  }
+
+  setTutorialBrandVisibility(false);
+
   closeTutorialOverlay();
 }
 
@@ -3146,6 +3196,11 @@ function declineTutorial() {
   stopTutorialRoutePulse();
   hideTutorialPointer();
   setTutorialOverlayAlignment('center');
+  setTutorialBrandVisibility(false);
+  if (tutorialSkipButton) {
+    tutorialSkipButton.classList.add('hidden');
+    tutorialSkipButton.setAttribute('aria-hidden', 'true');
+  }
   closeTutorialOverlay();
 }
 
@@ -3183,8 +3238,19 @@ async function handleTutorialSecondaryAction() {
   }
 }
 
-function setupTutorialInteractions() {
-  renderTutorialInvite();
+function handleTutorialSkipAction() {
+  if (tutorialTransitionInProgress) {
+    return;
+  }
+
+  if (tutorialActive) {
+    void finishTutorial();
+  } else {
+    declineTutorial();
+  }
+}
+
+async function setupTutorialInteractions() {
   openTutorialOverlay();
 
   if (tutorialPrimaryAction) {
@@ -3197,6 +3263,18 @@ function setupTutorialInteractions() {
     tutorialSecondaryAction.addEventListener('click', () => {
       void handleTutorialSecondaryAction();
     });
+  }
+
+  if (tutorialSkipButton) {
+    tutorialSkipButton.addEventListener('click', () => {
+      handleTutorialSkipAction();
+    });
+  }
+
+  try {
+    await startTutorial();
+  } catch (error) {
+    console.warn('Unable to start tutorial:', error);
   }
 
   if (tutorialPrimaryAction) {
@@ -7005,7 +7083,7 @@ if (routeOverlapCloseButton) {
   });
 }
 
-setupTutorialInteractions();
+void setupTutorialInteractions();
 
 window.addEventListener('resize', resizeCanvas);
 
