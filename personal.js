@@ -4283,6 +4283,35 @@ function createTooltipCloseButton() {
   return closeButton;
 }
 
+function isIOSPlatform() {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+
+  const uaDataPlatform = navigator.userAgentData?.platform;
+  if (typeof uaDataPlatform === 'string' && /iphone|ipad|ipod/i.test(uaDataPlatform)) {
+    return true;
+  }
+
+  const platform = typeof navigator.platform === 'string' ? navigator.platform : '';
+  if (/iPad|iPhone|iPod/.test(platform)) {
+    return true;
+  }
+
+  if (/Mac/.test(platform) && typeof navigator.maxTouchPoints === 'number' && navigator.maxTouchPoints > 1) {
+    return true;
+  }
+
+  const userAgent = typeof navigator.userAgent === 'string' ? navigator.userAgent : '';
+  if (/iPad|iPhone|iPod/.test(userAgent)) {
+    return true;
+  }
+
+  return false;
+}
+
+const IOS_SINGLE_TAP_OVERRIDE = isIOSPlatform();
+
 const TOUCH_DOUBLE_TAP_MAX_DELAY_MS = 450;
 let lastTouchActivationTarget = null;
 let lastTouchActivationTime = 0;
@@ -4347,6 +4376,10 @@ function isTouchDoubleTap(event) {
 }
 
 function shouldBlockSingleClick(event) {
+  if (IOS_SINGLE_TAP_OVERRIDE && isTouchLikeEvent(event)) {
+    return false;
+  }
+
   if (isTouchDoubleTap(event)) {
     return false;
   }
@@ -4393,7 +4426,9 @@ function buildGradeControls(route) {
   gradeLabel.appendChild(gradeInput);
 
   gradeInput.readOnly = true;
-  gradeInput.classList.add('requires-double-click');
+  if (!IOS_SINGLE_TAP_OVERRIDE) {
+    gradeInput.classList.add('requires-double-click');
+  }
 
   gradeInput.addEventListener(
     'mousedown',
@@ -4822,7 +4857,9 @@ function buildBetatipsSection(route, ariaLines = []) {
     textarea.placeholder = 'The trick is...to go up!';
     textarea.value = '';
     textarea.readOnly = true;
-    textarea.classList.add('requires-double-click');
+    if (!IOS_SINGLE_TAP_OVERRIDE) {
+      textarea.classList.add('requires-double-click');
+    }
 
     textarea.addEventListener(
       'mousedown',
