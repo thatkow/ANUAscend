@@ -29,6 +29,11 @@ import {
   getDefaultLocation,
   isLocationVisible,
 } from './shared/location.js';
+import {
+  initializeColorblindModeToggle,
+  isColorblindModeEnabled,
+  onColorblindModeChange,
+} from './shared/colorblind-mode.js';
 
 const authOverlay = document.getElementById('authOverlay');
 const appContent = document.getElementById('appContent');
@@ -46,6 +51,8 @@ const tooltip = document.getElementById('routeTooltip');
 const TOOLTIP_HISTORY_STATE_KEY = 'ascend.routeTooltip.open';
 let tooltipHistoryEntryActive = false;
 let suppressNextTooltipPopstate = false;
+
+initializeColorblindModeToggle();
 
 const DEVICE_LIKELY_HAS_TOUCH = (() => {
   try {
@@ -474,7 +481,7 @@ function createGradeChartElement() {
   chart.className = 'info-callout-chart';
   wrapper.appendChild(chart);
 
-  const gradeEntries = Array.from(GRADE_COLOR_MAP.entries());
+  const gradeEntries = Array.from(getActiveGradeColorMap().entries());
   const totalGrades = gradeEntries.length;
   const minimumHeight = 22;
   const maximumHeight = 100;
@@ -1627,7 +1634,57 @@ const GRADE_COLOR_MAP = new Map([
   [30, '#C10407'],
   [31, '#BD0306'],
 ]);
+const COLORBLIND_GRADE_COLOR_MAP = new Map([
+  [1, '#440154'],
+  [2, '#4A0952'],
+  [3, '#501051'],
+  [4, '#56184F'],
+  [5, '#5D204E'],
+  [6, '#63274C'],
+  [7, '#692F4B'],
+  [8, '#6F3749'],
+  [9, '#753E47'],
+  [10, '#7C4646'],
+  [11, '#824E44'],
+  [12, '#885543'],
+  [13, '#8E5D41'],
+  [14, '#946540'],
+  [15, '#9A6C3E'],
+  [16, '#A0743C'],
+  [17, '#A77C3B'],
+  [18, '#AD8339'],
+  [19, '#B38B38'],
+  [20, '#B99336'],
+  [21, '#BF9A35'],
+  [22, '#C6A233'],
+  [23, '#CCAA32'],
+  [24, '#D2B130'],
+  [25, '#D8B92E'],
+  [26, '#DEC12D'],
+  [27, '#E4C82B'],
+  [28, '#EAD02A'],
+  [29, '#F1D828'],
+  [30, '#F7DF27'],
+  [31, '#FDE725'],
+]);
 const DEFAULT_GRADELESS_COLOR = '#ffffff';
+const PAUL_TOL_BRIGHT_PALETTE = [
+  '#4477AA',
+  '#66CCEE',
+  '#228833',
+  '#CCBB44',
+  '#EE6677',
+  '#AA3377',
+  '#BBBBBB',
+  '#AA4499',
+  '#44AA99',
+  '#117733',
+  '#332288',
+  '#DDCC77',
+];
+function getActiveGradeColorMap() {
+  return isColorblindModeEnabled() ? COLORBLIND_GRADE_COLOR_MAP : GRADE_COLOR_MAP;
+}
 const MIN_BEZIER_STROKE_WIDTH = 2;
 const MAX_BEZIER_STROKE_WIDTH = 40;
 const DEFAULT_BEZIER_STROKE_WIDTH = 10;
@@ -1655,6 +1712,8 @@ const VIEW_MODE_META = {
 };
 const ASCENT_STATUS_ASCENDED_COLOR = '#7ed957';
 const ASCENT_STATUS_PROJECT_COLOR = '#4b5563';
+const COLORBLIND_ASCENT_STATUS_ASCENDED_COLOR = '#2563eb';
+const COLORBLIND_ASCENT_STATUS_PROJECT_COLOR = '#f97316';
 
 function normalizePathType(value) {
   if (typeof value === 'string') {
@@ -3417,6 +3476,19 @@ const routeBetatipsCache = new Map();
 const uidUsernameCache = new Map();
 let userAscentDetails = new Map();
 let progressionPreviouslyFocusedElement = null;
+onColorblindModeChange(() => {
+  resetColorblindHoldColorCache();
+  renderProgressionList();
+  redraw();
+
+  if (pinnedRouteId) {
+    const pinnedRoute = routes.find((route) => route?.id === pinnedRouteId);
+    if (pinnedRoute) {
+      updateTooltipContent(pinnedRoute);
+      positionTooltip();
+    }
+  }
+});
 const CLICK_DRAG_DISTANCE_THRESHOLD = 8;
 const CLICK_DRAG_DISTANCE_THRESHOLD_SQUARED =
   CLICK_DRAG_DISTANCE_THRESHOLD * CLICK_DRAG_DISTANCE_THRESHOLD;
@@ -6691,7 +6763,8 @@ function getGradeColorForValue(value) {
   }
 
   const clamped = Math.min(Math.max(rounded, MIN_GRADE_VALUE), MAX_GRADE_VALUE);
-  return GRADE_COLOR_MAP.get(clamped) ?? null;
+  const palette = getActiveGradeColorMap();
+  return palette.get(clamped) ?? null;
 }
 
 function getRouteGradeColor(route) {
@@ -6708,13 +6781,23 @@ function getRouteDisplayColor(route) {
   if (viewMode === VIEW_MODE_ASCENT_STATUS) {
     const routeId = route?.id;
     const isAscended = Boolean(routeId && ascendedRoutes.has(routeId));
-    return isAscended ? ASCENT_STATUS_ASCENDED_COLOR : ASCENT_STATUS_PROJECT_COLOR;
+    const ascendedColor = isColorblindModeEnabled()
+      ? COLORBLIND_ASCENT_STATUS_ASCENDED_COLOR
+      : ASCENT_STATUS_ASCENDED_COLOR;
+    const projectColor = isColorblindModeEnabled()
+      ? COLORBLIND_ASCENT_STATUS_PROJECT_COLOR
+      : ASCENT_STATUS_PROJECT_COLOR;
+    return isAscended ? ascendedColor : projectColor;
   }
   if (viewMode === VIEW_MODE_GRADE_COLORS) {
     const gradeColor = getRouteGradeColor(route);
     return gradeColor ?? DEFAULT_GRADELESS_COLOR;
   }
-  return getRouteStrokeColor(route);
+  const holdColor = getRouteStrokeColor(route);
+  if (viewMode === VIEW_MODE_HOLD_COLORS && isColorblindModeEnabled()) {
+    return mapHoldColorToColorblindPalette(holdColor);
+  }
+  return holdColor;
 }
 
 const overlapColorCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
@@ -6789,6 +6872,111 @@ function parseColorToRGB(color) {
   }
 
   return null;
+}
+
+function srgbChannelToLinear(value) {
+  const normalized = Math.max(0, Math.min(255, value)) / 255;
+  if (normalized <= 0.04045) {
+    return normalized / 12.92;
+  }
+  return ((normalized + 0.055) / 1.055) ** 2.4;
+}
+
+function xyzToLabComponent(value) {
+  const epsilon = 216 / 24389;
+  const kappa = 24389 / 27;
+  if (value > epsilon) {
+    return Math.cbrt(value);
+  }
+  return (kappa * value + 16) / 116;
+}
+
+function convertRGBToLab(rgb) {
+  if (!rgb) {
+    return null;
+  }
+
+  const r = srgbChannelToLinear(rgb.r ?? 0);
+  const g = srgbChannelToLinear(rgb.g ?? 0);
+  const b = srgbChannelToLinear(rgb.b ?? 0);
+
+  const x = r * 0.4124564 + g * 0.3575761 + b * 0.1804375;
+  const y = r * 0.2126729 + g * 0.7151522 + b * 0.072175;
+  const z = r * 0.0193339 + g * 0.119192 + b * 0.9503041;
+
+  const xn = 0.95047;
+  const yn = 1;
+  const zn = 1.08883;
+
+  const fx = xyzToLabComponent(x / xn);
+  const fy = xyzToLabComponent(y / yn);
+  const fz = xyzToLabComponent(z / zn);
+
+  const L = 116 * fy - 16;
+  const a = 500 * (fx - fy);
+  const bLab = 200 * (fy - fz);
+  return { L, a, b: bLab };
+}
+
+const COLORBLIND_HOLD_COLOR_CACHE = new Map();
+const COLORBLIND_HOLD_COLOR_LAB_PALETTE = PAUL_TOL_BRIGHT_PALETTE.map((hex) => {
+  const rgb = parseColorToRGB(hex);
+  const lab = convertRGBToLab(rgb);
+  if (!lab) {
+    return null;
+  }
+  return { hex, lab };
+}).filter(Boolean);
+
+function getColorblindHoldPaletteMatch(rgbLab) {
+  if (!rgbLab || !COLORBLIND_HOLD_COLOR_LAB_PALETTE.length) {
+    return null;
+  }
+
+  let closest = null;
+  let smallestDistance = Number.POSITIVE_INFINITY;
+  COLORBLIND_HOLD_COLOR_LAB_PALETTE.forEach((entry) => {
+    const dL = rgbLab.L - entry.lab.L;
+    const dA = rgbLab.a - entry.lab.a;
+    const dB = rgbLab.b - entry.lab.b;
+    const distance = dL * dL + dA * dA + dB * dB;
+    if (distance < smallestDistance) {
+      smallestDistance = distance;
+      closest = entry.hex;
+    }
+  });
+
+  return closest;
+}
+
+function mapHoldColorToColorblindPalette(color) {
+  if (typeof color !== 'string' || !color.trim()) {
+    return color;
+  }
+
+  const rgb = parseColorToRGB(color);
+  if (!rgb) {
+    return color;
+  }
+
+  const cacheKey = `${rgb.r},${rgb.g},${rgb.b}`;
+  if (COLORBLIND_HOLD_COLOR_CACHE.has(cacheKey)) {
+    return COLORBLIND_HOLD_COLOR_CACHE.get(cacheKey);
+  }
+
+  const lab = convertRGBToLab(rgb);
+  if (!lab) {
+    return color;
+  }
+
+  const match = getColorblindHoldPaletteMatch(lab);
+  const resolved = match ?? color;
+  COLORBLIND_HOLD_COLOR_CACHE.set(cacheKey, resolved);
+  return resolved;
+}
+
+function resetColorblindHoldColorCache() {
+  COLORBLIND_HOLD_COLOR_CACHE.clear();
 }
 
 function computeRelativeLuminance(rgb) {
